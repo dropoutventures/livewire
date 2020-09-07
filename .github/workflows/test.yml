@@ -8,26 +8,24 @@ on:
     types: [ready_for_review, synchronize, opened]
 
 jobs:
-  jest:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install modules
-        run: yarn
-
-      - name: Run tests
-        run: yarn test
   build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
       matrix:
         php: [7.2, 7.3, 7.4]
-        laravel: [7.*]
+        laravel: [7.*, 8.x-dev]
         dependency-version: [prefer-stable]
+        exclude:
+          - php: 7.2
+            laravel: 8.x-dev
         include:
           - laravel: 7.*
             testbench: 5.*
+            testbench-dusk: 5.*
+          - laravel: 8.x-dev
+            testbench: 6.x-dev
+            testbench-dusk: dev-master
 
     name: PHP:${{ matrix.php }} / Laravel:${{ matrix.laravel }}(${{ matrix.dependency-version }})
 
@@ -40,6 +38,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, bcmath, soap, intl, gd, exif, iconv, imagick
+          tools: composer:v2
           coverage: none
 
       - name: Get composer cache directory
@@ -55,8 +54,14 @@ jobs:
 
       - name: Install Composer dependencies
         run: |
-          composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update --dev
+          composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" "orchestra/testbench-dusk:${{ matrix.testbench-dusk }}" --no-interaction --no-update --dev
           composer update --${{ matrix.dependency-version }} --prefer-dist --no-interaction --no-suggest
 
-      - name: Run tests
-        run: vendor/bin/phpunit
+      - name: Setup dusk/chrome
+        run: vendor/bin/dusk-updater detect --no-interaction
+
+      - name: Run Unit tests
+        run: vendor/bin/phpunit --testsuite Unit
+
+      - name: Run Browser tests
+        run: vendor/bin/phpunit --testsuite Browser

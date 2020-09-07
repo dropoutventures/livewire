@@ -1,7 +1,7 @@
 import EventAction from '@/action/event'
 import HookManager from '@/HookManager'
-import DirectiveManager from '@/DirectiveManager'
 import MessageBus from './MessageBus'
+import DirectiveManager from './DirectiveManager'
 
 const store = {
     componentsById: {},
@@ -9,9 +9,10 @@ const store = {
     initialRenderIsFinished: false,
     livewireIsInBackground: false,
     livewireIsOffline: false,
-    hooks: HookManager,
+    sessionHasExpired: false,
     directives: DirectiveManager,
-    onErrorCallback: () => {},
+    hooks: HookManager,
+    onErrorCallback: () => { },
 
     components() {
         return Object.keys(this.componentsById).map(key => {
@@ -67,7 +68,7 @@ const store = {
     emitSelf(componentId, event, ...params) {
         let component = this.findComponent(componentId)
 
-        if (component.events.includes(event)) {
+        if (component.listeners.includes(event)) {
             component.addAction(new EventAction(event, params))
         }
     },
@@ -76,7 +77,7 @@ const store = {
         let components = this.getComponentsByName(componentName)
 
         components.forEach(component => {
-            if (component.events.includes(event)) {
+            if (component.listeners.includes(event)) {
                 component.addAction(new EventAction(event, params))
             }
         })
@@ -85,7 +86,7 @@ const store = {
     componentsListeningForEventThatAreTreeAncestors(el, event) {
         var parentIds = []
 
-        var parent = el.rawNode().parentElement.closest('[wire\\:id]')
+        var parent = el.parentElement.closest('[wire\\:id]')
 
         while (parent) {
             parentIds.push(parent.getAttribute('wire:id'))
@@ -95,7 +96,7 @@ const store = {
 
         return this.components().filter(component => {
             return (
-                component.events.includes(event) &&
+                component.listeners.includes(event) &&
                 parentIds.includes(component.id)
             )
         })
@@ -103,7 +104,7 @@ const store = {
 
     componentsListeningForEvent(event) {
         return this.components().filter(component => {
-            return component.events.includes(event)
+            return component.listeners.includes(event)
         })
     },
 

@@ -3,8 +3,6 @@
 namespace Livewire;
 
 use Exception;
-use Illuminate\Foundation\Application;
-use Symfony\Component\Debug\Exception\FatalThrowableError;
 use Throwable;
 
 class LivewireViewCompilerEngine extends CompilerEngine
@@ -16,13 +14,11 @@ class LivewireViewCompilerEngine extends CompilerEngine
     {
         $this->livewireComponent = $component;
         $this->isRenderingLivewireComponent = true;
-        $this->addLivewireDirectivesToCompiler();
     }
 
     public function endLivewireRendering()
     {
         $this->isRenderingLivewireComponent = false;
-        $this->removeLivewireDirectivesFromCompiler();
     }
 
     public function setLivewireComponent($component)
@@ -51,35 +47,9 @@ class LivewireViewCompilerEngine extends CompilerEngine
         } catch (Exception $e) {
             $this->handleViewException($e, $obLevel);
         } catch (Throwable $e) {
-            if (Application::VERSION === '7.x-dev' || version_compare(Application::VERSION, '7.0', '>=')) {
-                $this->handleViewException($e, $obLevel);
-            } else {
-                $this->handleViewException(new FatalThrowableError($e), $obLevel);
-            }
+            $this->handleViewException($e, $obLevel);
         }
 
         return ltrim(ob_get_clean());
-    }
-
-    protected function addLivewireDirectivesToCompiler()
-    {
-        $this->exposedCompiler = new ObjectPrybar($this->compiler);
-
-        // Grab the "customDirectives" property from inside the compiler.
-        // It's normally "protected" so we have to pry it open.
-        // We'll add what we need for Livewire, then put
-        // it back to the way we found it.
-        $customDirectives = $this->tmpCustomDirectives = $this->exposedCompiler->getProperty('customDirectives');
-
-        if (! isset($customDirectives['this'])) {
-            $customDirectives['this'] = [LivewireBladeDirectives::class, 'this'];
-        }
-
-        $this->exposedCompiler->setProperty('customDirectives', $customDirectives);
-    }
-
-    public function removeLivewireDirectivesFromCompiler()
-    {
-        $this->exposedCompiler->setProperty('customDirectives', $this->tmpCustomDirectives);
     }
 }

@@ -2,13 +2,13 @@
 
 namespace Livewire;
 
-use Livewire\Livewire;
 use Illuminate\View\View;
 use BadMethodCallException;
 use Illuminate\Support\Str;
+use Illuminate\Routing\Route;
 use Illuminate\Support\ViewErrorBag;
 use Illuminate\Support\Traits\Macroable;
-use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Contracts\Container\Container;
 use Livewire\Exceptions\CannotUseReservedLivewireComponentProperties;
 
 abstract class Component
@@ -19,29 +19,53 @@ abstract class Component
         ComponentConcerns\HandlesActions,
         ComponentConcerns\ReceivesEvents,
         ComponentConcerns\PerformsRedirects,
-        ComponentConcerns\DetectsDirtyProperties,
         ComponentConcerns\TracksRenderedChildren,
         ComponentConcerns\InteractsWithProperties;
 
     public $id;
 
-    protected $updatesQueryString = [];
+    protected $queryString = [];
     protected $computedPropertyCache = [];
+    protected $initialLayoutConfiguration = [];
+    protected $shouldSkipRender = false;
+    protected $preRenderedView;
 
-    public function __construct($id)
+    public function __construct($id = null)
     {
-        $this->id = $id;
+        $this->id = $id ?? Str::random(20);
 
         $this->ensureIdPropertyIsntOverridden();
 
         $this->initializeTraits();
     }
 
+    public function __invoke(Container $container, Route $route)
+    {
+        $componentParams = (new ImplicitRouteBinding($container))
+            ->resolveAllParameters($route, $this);
+
+        $manager = LifecycleManager::fromInitialInstance($this)
+            ->initialHydrate()
+            ->mount($componentParams)
+            ->renderToView();
+
+        $layoutType = $this->initialLayoutConfiguration['type'] ?? 'component';
+
+        return app('view')->file(__DIR__."/Macros/livewire-view-{$layoutType}.blade.php", [
+            'view' => $this->initialLayoutConfiguration['view'] ?? 'layouts.app',
+            'params' => $this->initialLayoutConfiguration['params'] ?? [],
+            'slotOrSection' => $this->initialLayoutConfiguration['slotOrSection'] ?? [
+                'extends' => 'content', 'component' => 'default',
+            ][$layoutType],
+            'manager' => $manager,
+        ]);
+    }
+
     protected function ensureIdPropertyIsntOverridden()
     {
         throw_if(
-            in_array('id', array_keys($this->getPublicPropertiesDefinedBySubClass())),
-            new CannotUseReservedLivewireComponentProperties('id', $this->getName())
+            array_key_exists('id', $this->getPublicPropertiesDefinedBySubClass()),
+            new CannotUseReservedLivewireComponentProperties('id', $this::getName())
         );
     }
 
@@ -54,7 +78,7 @@ abstract class Component
         }
     }
 
-    public function getName()
+    public static function getName()
     {
         $namespace = collect(explode('.', str_replace(['/', '\\'], '.', config('livewire.class_namespace', 'App\\Http\\Livewire'))))
             ->map([Str::class, 'kebab'])
@@ -71,23 +95,43 @@ abstract class Component
         return $fullName;
     }
 
-    public function getUpdatesQueryString()
+    public function getQueryString()
     {
-        return $this->updatesQueryString;
+        return $this->queryString;
     }
 
-    public function getCasts()
+    public function skipRender()
     {
-        return $this->casts;
+        $this->shouldSkipRender = true;
     }
 
-    public function render()
+    public function renderToView()
     {
-        return view("livewire.{$this->getName()}");
+        $view = method_exists($this, 'render')
+            ? app()->call([$this, 'render'])
+            : view("livewire.{$this::getName()}");
+
+        if (is_string($view)) {
+            $view = app('view')->make(CreateBladeView::fromString($view));
+        }
+
+        throw_unless($view instanceof View,
+            new \Exception('"render" method on ['.get_class($this).'] must return instance of ['.View::class.']'));
+
+        // Get the layout config from the view.
+        if ($view->livewireLayout) {
+            $this->initialLayoutConfiguration = $view->livewireLayout;
+        }
+
+        return $this->preRenderedView = $view;
     }
 
     public function output($errors = null)
     {
+        if ($this->shouldSkipRender) return null;
+
+        $view = $this->preRenderedView;
+
         // In the service provider, we hijack Laravel's Blade engine
         // with our own. However, we only want Livewire hijackings,
         // while we're rendering Livewire components. So we'll
@@ -95,17 +139,6 @@ abstract class Component
         // of this method.
         $engine = app('view.engine.resolver')->resolve('blade');
         $engine->startLivewireRendering($this);
-
-        $view = $this->render();
-
-        if (is_string($view) && Livewire::isLaravel7()) {
-            $view = app('view')->make((new CreateBladeViewFromString)($view));
-        }
-
-        $this->normalizePublicPropertiesForJavaScript();
-
-        throw_unless($view instanceof View,
-            new \Exception('"render" method on ['.get_class($this).'] must return instance of ['.View::class.']'));
 
         $this->setErrorBag(
             $errorBag = $errors ?: ($view->getData()['errors'] ?? $this->getErrorBag())
@@ -120,13 +153,13 @@ abstract class Component
             $previouslySharedErrors->getBag('default')
         );
 
-        app('view')->share('errors', $errors);
-        app('view')->share('_instance', $this);
-
         $view->with([
             'errors' => $errors,
             '_instance' => $this,
         ] + $this->getPublicPropertiesDefinedBySubClass());
+
+        app('view')->share('errors', $errors);
+        app('view')->share('_instance', $this);
 
         $output = $view->render();
 
@@ -154,29 +187,6 @@ abstract class Component
         }
     }
 
-    protected function reindexArrayWithNumericKeysOtherwiseJavaScriptWillMessWithTheOrder($value)
-    {
-        if (! is_array($value)) {
-            return $value;
-        }
-
-        $normalizedData = $value;
-
-        // Make sure string keys are last (but not ordered) and numeric keys are ordered.
-        // JSON.parse will do this on the frontend, so we'll get ahead of it.
-        uksort($normalizedData, function ($a, $b) {
-            if (is_numeric($a) && is_numeric($b)) return $a > $b;
-
-            if (! is_numeric($a) && ! is_numeric($b)) return 0;
-
-            if (! is_numeric($a)) return 1;
-        });
-
-        return array_map(function ($value) {
-            return $this->reindexArrayWithNumericKeysOtherwiseJavaScriptWillMessWithTheOrder($value);
-        }, $normalizedData);
-    }
-
     public function forgetComputed($key = null)
     {
         if (is_null($key)) {
@@ -195,22 +205,24 @@ abstract class Component
 
     public function __get($property)
     {
-        if (method_exists($this, $computedMethodName = 'get'.ucfirst($property).'Property')) {
+        $studlyProperty = str_replace(' ', '', ucwords(str_replace(['-', '_'], ' ', $property)));
+
+        if (method_exists($this, $computedMethodName = 'get'.$studlyProperty.'Property')) {
             if (isset($this->computedPropertyCache[$property])) {
                 return $this->computedPropertyCache[$property];
-            } else {
-                return $this->computedPropertyCache[$property] = $this->$computedMethodName();
             }
+
+            return $this->computedPropertyCache[$property] = $this->$computedMethodName();
         }
 
-        throw new \Exception("Property [{$property}] does not exist on the {$this->getName()} component.");
+        throw new \Exception("Property [{$property}] does not exist on the {$this::getName()} component.");
     }
 
     public function __call($method, $params)
     {
         if (
-            in_array($method, ['mount', 'hydrate', 'updating', 'updated'])
-            || Str::startsWith($method, ['updating', 'updated'])
+            in_array($method, ['mount', 'hydrate', 'dehydrate', 'updating', 'updated'])
+            || Str::startsWith($method, ['updating', 'updated', 'hydrate', 'dehydrate'])
         ) {
             // Eat calls to the lifecycle hooks if the dev didn't define them.
             return;

@@ -11,6 +11,13 @@ class LivewireBladeDirectives
         return "window.livewire.find('{{ \$_instance->id }}')";
     }
 
+    public static function entangle($expression)
+    {
+        return <<<EOT
+<?php if ((object) {$expression} instanceof \Livewire\WireDirective) : ?>window.Livewire.find('{{ \$_instance->id }}').entangle('{{ {$expression}->value() }}'){{ {$expression}->hasModifier('defer') ? '.defer' : '' }} <?php else : ?> window.Livewire.find('{{ \$_instance->id }}').entangle('{{ {$expression} }}') <?php endif; ?>
+EOT;
+    }
+
     public static function livewireStyles($expression)
     {
         return '{!! \Livewire\Livewire::styles('.$expression.') !!}';
@@ -37,18 +44,18 @@ class LivewireBladeDirectives
         return <<<EOT
 <?php
 if (! isset(\$_instance)) {
-    \$dom = \Livewire\Livewire::mount({$expression})->dom;
+    \$html = \Livewire\Livewire::mount({$expression})->html();
 } elseif (\$_instance->childHasBeenRendered($cachedKey)) {
     \$componentId = \$_instance->getRenderedChildComponentId($cachedKey);
     \$componentTag = \$_instance->getRenderedChildComponentTagName($cachedKey);
-    \$dom = \Livewire\Livewire::dummyMount(\$componentId, \$componentTag);
+    \$html = \Livewire\Livewire::dummyMount(\$componentId, \$componentTag);
     \$_instance->preserveRenderedChild($cachedKey);
 } else {
     \$response = \Livewire\Livewire::mount({$expression});
-    \$dom = \$response->dom;
-    \$_instance->logRenderedChild($cachedKey, \$response->id, \Livewire\Livewire::getRootElementTagName(\$dom));
+    \$html = \$response->html();
+    \$_instance->logRenderedChild($cachedKey, \$response->id(), \Livewire\Livewire::getRootElementTagName(\$html));
 }
-echo \$dom;
+echo \$html;
 ?>
 EOT;
     }
